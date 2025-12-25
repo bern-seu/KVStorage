@@ -1,0 +1,43 @@
+syntax = "proto3";
+// KVserver的rpc描述，负责沟通kvDB和raft节点，是一个中间件
+// KVserver负责接收外部请求与响应的中间件，沟通kvDB和raft节点
+// 接收外部请求》》本机内部与raft和kvDB协商如何处理请求》》返回外部响应
+// 请求分成两种：get和put（set）
+
+package raftKVRpcProctoc;
+
+option cc_generic_services = true;
+
+
+// 读请求参数
+message GetArgs{
+  bytes Key = 1 ;// 1. 你要查哪个 Key？
+  bytes ClientId = 2 ;// 2. 你是谁？(客户端唯一标识)
+  int32 RequestId = 3;// 3. 这是你的第几个请求？(请求序列号)
+  //通过 ClientId + RequestId 组成的唯一标识，服务端可以实现去重（Idempotency，幂等性），防止同一个操作被执行两次
+}
+
+message GetReply  {
+  bytes Err = 1;// 1. 错误码/状态信息
+  bytes Value = 2;// 2. 查到的具体数据
+}
+
+// Put or Append
+// 写请求参数
+message PutAppendArgs  {
+  bytes Key = 1;// 1. Key
+  bytes  Value = 2 ;// 2. Value
+  bytes  Op = 3;// 3. 操作类型："Put" (覆盖) 还是 "Append" (追加)
+  bytes  ClientId = 4;// 4. 客户端 ID
+  int32  RequestId = 5;// 5. 请求序列号
+}
+
+message PutAppendReply  {
+  bytes Err = 1;// 错误码
+}
+
+//只有raft节点之间才会涉及rpc通信
+service kvServerRpc {
+    rpc PutAppend(PutAppendArgs) returns(PutAppendReply);
+    rpc Get (GetArgs) returns(GetReply);
+}
