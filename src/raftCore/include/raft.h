@@ -1,4 +1,4 @@
-/* Raft算法流程 */
+/* Raft低层的接口框架 */
 #ifndef RAFT_H
 #define RAFT_H
 
