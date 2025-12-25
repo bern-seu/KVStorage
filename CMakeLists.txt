@@ -18,7 +18,7 @@ link_directories(${PROJECT_SOURCE_DIR}/lib)
 # src包含了所有的相关代码
 add_subdirectory(src)
 # example包含了使用的示例代码
-add_subdirectory(example)
+#add_subdirectory(example)
 
 add_library(skip_list_on_raft STATIC ${src_raftCore} ${src_raftRpcPro})
-target_link_libraries()
+#target_link_libraries()

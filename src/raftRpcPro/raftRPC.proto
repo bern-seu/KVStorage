@@ -9,7 +9,7 @@ message LogEntry{
 	int32 LogTerm   =2;// 这条日志是在哪个任期产生的
 	int32 LogIndex  = 3;// 这条日志在数组中的索引
 }
-// 发送新的日志 和 维持心跳 由leader复制log条目，也可以当做是心跳连接，注释中的rf为leader节点
+// Leader 发给 Follower 的包。只有Leader会发送，Followe是接收
 message AppendEntriesArgs  {
 	int32 Term        =1;// Leader 当前的任期（我是第几届总统）
 	int32 LeaderId       =2;// Leader 的 ID（比如 IP:Port）
@@ -50,7 +50,7 @@ message RequestVoteArgs  {
 message RequestVoteReply  {
 	int32 Term        =1;   // 如果 Candidate 发现 Voter 的 Term 比自己大，说明自己落伍了，退选。
 	bool VoteGranted  =2;   // true: 投给你；false: 不投。
-	int32 VoteState   =3;   // 自定义状态。
+	int32 VoteState   =3;   //  投票状态。
 }
 
 //当日志太长占满内存时，节点会生成快照（Snapshot），把之前的日志删掉。如果一个 Follower 落后太多，Leader 发送日志已经接不上了（因为 Leader 已经把旧日志删了），Leader 就会直接把快照发给它。
