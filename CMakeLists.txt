@@ -21,5 +21,5 @@ add_subdirectory(src)
 # example包含了使用的示例代码
 #add_subdirectory(example)
 
-add_library(skip_list_on_raft STATIC ${src_common} ${src_raftCore} ${src_raftRpcPro})
+add_library(skip_list_on_raft STATIC ${src_common} ${SRC_LIST} ${src_raftCore} ${src_raftRpcPro})
 #target_link_libraries()

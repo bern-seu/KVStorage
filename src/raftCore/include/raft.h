@@ -2,11 +2,22 @@
 #ifndef RAFT_H
 #define RAFT_H
 
+#include <boost/serialization/string.hpp>
+#include <boost/serialization/vector.hpp>
+#include <mutex>
+#include <memory>
+#include <vector>
+#include <chrono>
+
+#include "boost/serialization/serialization.hpp"
+#include "boost/any.hpp"
+
 #include "Persister.h"
 #include "raftRPC.pb.h"
 #include "ApplyMsg.h"
 #include "util.h"
 #include "raftRpcUtil.h"
+#include "monsoon.h"
 /* 定义一些常量表达式 */
 /* 网络状态 */
 //网络异常的时候为Disconnected，只要网络正常就为AppNormal，防止matchIndex[]数组异常减小
@@ -22,6 +33,33 @@ constexpr int Normal = 3;
 //基于通信协议，提供raft节点的rpc服务
 class Raft : public raftRpcProctoc::raftRpc{
 private:
+    std::mutex m_mtx;
+    std::vector<std::shared_ptr<RaftRpcUtil>> m_peers;
+    std::shared_ptr<Persister> m_presister;
+    int m_me;
+    int m_currentTerm;
+    int m_votedFor;
+    std::vector<raftRpcProctoc::LogEntry> m_logs; //日志条目数组，包含了状态机要执行的指令集，以及收到领导时的任期号.这两个状态所有结点都在维护，易失
+    // 已经汇报给状态机（上层应用）的log 的index
+    int m_commitIndex;
+    int m_lastApplied;
+    // 这两个状态是由服务器来维护，易失
+    // 这两个状态的下标1开始，因为通常commitIndex和lastApplied从0开始，应该是一个无效的index，因此下标从1开始
+    std::vector<int> m_nextIndex;
+    std::vector<int> m_matchIndex;
+    enum Status { Follower, Candidate, Leader};
+    // 身份
+    Status m_status;
+    // raft内部使用的chan，applyChan是用于和服务层交互,最后好像没用上
+    std::shared_ptr<LockQueue<ApplyMsg>> applyChan;
+    // 选举超时
+    std::chrono::_V2::system_clock::time_point m_lastResetElectionTime;
+    // 2D中用于传入快照点
+    // 储存了快照中的最后一个日志的Index和Term
+    int m_lastSnapshotIncludeIndex;
+    int m_lastSnapshotIncludeTerm;
+    // 协程
+    std::unique_ptr<monsoon::IOManager> m_ioManager = nullptr;
 
 public:
     //AppendEntries方法的本地实现(利用了重载)
@@ -125,7 +163,26 @@ public:
                         ::google::protobuf::Closure* done) override;
     void init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
             std::shared_ptr<LockQueue<ApplyMsg>> applyCh);
-
+private:
+    // for persist
+    class BoostPersistRaftNode{
+        public:
+            friend class boost::serialization::access;
+            template <class Archive>
+            void serialize(Archive &ar, const unsigned int version) {
+                ar &m_currentTerm;
+                ar &m_votedFor;
+                ar &m_lastSnapshotIncludeIndex;
+                ar &m_lastSnapshotIncludeTerm;
+                ar &m_logs;
+            }
+            int m_currentTerm;
+            int m_votedFor;
+            int m_lastSnapshotIncludeIndex;
+            int m_lastSnapshotIncludeTerm;
+            std::vector<std::string> m_logs;
+            std::unordered_map<std::string, int> umap;
+    };
 };
 
 #endif  // RAFT_H
