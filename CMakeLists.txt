@@ -11,6 +11,7 @@ set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 
 # 设置项目编译头文件搜索路径
+include_directories(${PROJECT_SOURCE_DIR}/src/common/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/raftCore/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/raftRpcPro/include)
 # 设置项目库文件搜索路径 -L
@@ -20,5 +21,5 @@ add_subdirectory(src)
 # example包含了使用的示例代码
 #add_subdirectory(example)
 
-add_library(skip_list_on_raft STATIC ${src_raftCore} ${src_raftRpcPro})
+add_library(skip_list_on_raft STATIC ${src_common} ${src_raftCore} ${src_raftRpcPro})
 #target_link_libraries()

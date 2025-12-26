@@ -2,8 +2,11 @@
 #ifndef RAFT_H
 #define RAFT_H
 
+#include "Persister.h"
 #include "raftRPC.pb.h"
 #include "ApplyMsg.h"
+#include "util.h"
+#include "raftRpcUtil.h"
 /* 定义一些常量表达式 */
 /* 网络状态 */
 //网络异常的时候为Disconnected，只要网络正常就为AppNormal，防止matchIndex[]数组异常减小
@@ -18,6 +21,8 @@ constexpr int Normal = 3;
 
 //基于通信协议，提供raft节点的rpc服务
 class Raft : public raftRpcProctoc::raftRpc{
+private:
+
 public:
     //AppendEntries方法的本地实现(利用了重载)
     void AppendEntries(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcProctoc::AppendEntriesReply *reply);
@@ -48,8 +53,78 @@ public:
                        raftRpcProctoc::InstallSnapshotResponse *reply);
     //负责查看是否该发送心跳了，如果该发起就执行doHeartBeat()
     void leaderHearBeatTicker();
+    //Leader 发送快照
+    void leaderSendSnapShot(int server);
+    //检查是否有某条日志已经被复制到了“大多数”节点上。如果是，Leader 就会把这条日志标记为“已提交（Committed）”
+    void leaderUpdateCommitIndex();
+    //对象index日志是否匹配，Follower 用来检查自己的日志，跟 Leader 发来的日志是否“接得上”
+    bool matchLog(int logIndex, int logTerm);
+    //持久化当前状态，当前的任期，当前任期投给了谁，日志条目数组
+    void persist();
+    //请求投票的处理（重载）
+    void RequestVote(const raftRpcProctoc::RequestVoteArgs *args, raftRpcProctoc::RequestVoteReply *reply);
+    //判断当前节点是否有最新日志
+    bool UpToDate(int index, int term);
+    //获取最后一个日志entry的term，index
+    int getLastLogIndex();
+    int getLastLogTerm();
+    //获取最后一个日志entry的term和index
+    void getLastLogIndexAndTerm(int *lastLogIndex, int *lastLogTerm);
+    //获取指定日志索引的term
+    int getLogTermFromLogIndex(int logIndex);
+    //获取Raft状态的大小，目前持久化存储的数据所占用的字节数
+    /* 
+    Raft 现在的日志文件有多大了？这个函数的存在目的只有一个：为了触发快照
+    KVServer会定期调用GetRaftStateSize() 来监控 Raft，如果日志太大了，就会制作快照
+    发送快照的场景：
+    一、KVServer -> 本地 Raft；二、Leader -> 落后的 Follower
+     */
+    int GetRaftStateSize();
+    //将日志索引转换为日志entry在m_logs数组中的位置
+    int getSlicesIndexFromLogIndex(int logIndex);
+    //请求其他节点给自己投票，
+    bool sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVoteArgs> args,
+                        std::shared_ptr<raftRpcProctoc::RequestVoteReply> reply, std::shared_ptr<int> votedNum);
+    //发送追加日志条目
+    bool sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> args,
+                            std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply, std::shared_ptr<int> appendNums);
 
-private:
+    // 给上层的KVserver发送消息，rf.applyChan <- msg //不拿锁执行  可以单独创建一个线程执行，但是为了同意使用std:thread，避免使用pthread_create，因此专门写一个函数来执行
+    void pushMsgToKvServer(ApplyMsg msg);
+    //读取持久化数据,将从硬盘里读出来的二进制字符串，还原成 Raft 节点的内存变量。（反序列化）
+    void readPersist(std::string data);
+    //持久化数据,将 Raft 节点当前的 核心状态（Hard State） 转换成一个二进制字符串(序列化)
+    std::string persistData();
+
+    //整个 Raft 系统启动共识流程的唯一入口,是 KVServer 叫 Raft “干活” 的入口（提交新任务）
+    void Start(Op command, int *newLogIndex, int *newLogTerm, bool *isLeader);
+
+    // Snapshot the service says it has created a snapshot that has
+    // all info up to and including index. this means the
+    // service no longer needs the log through (and including)
+    // that index. Raft should now trim its log as much as possible.
+    // index代表是快照apply应用的index,而snapshot代表的是上层service传来的快照字节流，包括了Index之前的数据
+    // 这个函数的目的是把安装到快照里的日志抛弃，并安装快照数据，同时更新快照下标，属于peers自身主动更新，与leader发送快照不冲突
+    // 即服务层主动发起请求raft保存snapshot里面的数据，index是用来表示snapshot快照执行到了哪条命令
+    void Snapshot(int index, std::string snapshot);
+
+public:
+    // 重写基类方法,因为rpc远程调用真正调用的是这个方法
+    // 序列化，反序列化等操作rpc框架都已经做完了，因此这里只需要获取值然后真正调用本地方法即可。 
+    void AppendEntries(google::protobuf::RpcController* controller,
+                        const ::raftRpcProctoc::AppendEntriesArgs* request,
+                        ::raftRpcProctoc::AppendEntriesReply* response,
+                        ::google::protobuf::Closure* done) override;
+    void InstallSnapshot(google::protobuf::RpcController* controller,
+                        const ::raftRpcProctoc::InstallSnapshotRequest* request,
+                        ::raftRpcProctoc::InstallSnapshotResponse* response,
+                        ::google::protobuf::Closure* done) override;
+    void RequestVote(google::protobuf::RpcController* controller,
+                        const ::raftRpcProctoc::RequestVoteArgs* request,
+                        ::raftRpcProctoc::RequestVoteReply* response,
+                        ::google::protobuf::Closure* done) override;
+    void init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
+            std::shared_ptr<LockQueue<ApplyMsg>> applyCh);
 
 };
 

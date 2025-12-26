@@ -1,0 +1,8 @@
+void Start(Op command, int *newLogIndex, int *newLogTerm, bool *isLeader);
+这里的Op处理
+// 修改这里：Op -> std::string
+    // command 就是一串二进制数据，Raft 负责把它复制到所有节点
+    void Start(std::string command, int *newLogIndex, int *newLogTerm, bool *isLeader)，Raft 全程把这个 command 当作黑盒处理，绝不反序列化它，Raft 接收到 cmd_str。
+    Raft 把它塞进 LogEntry 的 command 字段（类型是 bytes）。Raft 负责复制日志、达成共识。Raft 全程把这个 command 当作黑盒处理，绝不反序列化它。
+    
+在persister中保存了流，为什么保存流？
