@@ -8,6 +8,33 @@
 #include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/serialization/access.hpp>
+
+#include "config.h"
+
+template <class F>
+class DeferClass{
+public:
+    DeferClass(F&& f) : m_func(std::forward<F>(f)) {}
+    DeferClass(const F& f) : m_func(f) {}
+    ~DeferClass() {m_func();}
+
+    DeferClass(const DeferClass& e) = delete;
+    DeferClass& operator=(const DeferClass&e) = delete;
+private:
+    F m_func;
+};
+
+#define _CONCAT(a, b) a##b
+#define _MAKE_DEFER_(line) DeferClass _CONCAT(defer_placeholder, line) = [&]()
+
+#undef DEFER
+#define DEFER _MAKE_DEFER_(__LINE__)
+
+
+void DPrintf(const char* format, ...);
+std::chrono::_V2::system_clock::time_point now();
+
+
 //异步队列
 template<class T>
 class LockQueue{
@@ -85,16 +112,16 @@ public:
         return true;  // todo : 解析失敗如何處理，要看一下boost庫了
     }
 public:
-    f
-    riend std::ostream& operator<<(std::ostream& os, const Op& obj){
+    friend std::ostream& operator<<(std::ostream& os, const Op& obj){
         os << "[MyClass:Operation{" + obj.Operation + "},Key{" + obj.Key + "},Value{" + obj.Value + "},ClientId{" +
               obj.ClientId + "},RequestId{" + std::to_string(obj.RequestId) + "}";  // 在这里实现自定义的输出格式
         return os;
     }
 private:
-    friend class boost::serialization::access;
+    friend class boost::serialization::access;//允许Boost访问私有成员
     template <class Archive>
     void serialize(Archive& ar, const unsigned int version) {
+        // 注意这里的 '&' 符号，它是 Boost 定义的一个特殊操作符
         ar & Operation;
         ar & Key;
         ar & Value;

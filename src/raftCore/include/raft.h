@@ -5,9 +5,13 @@
 #include <boost/serialization/string.hpp>
 #include <boost/serialization/vector.hpp>
 #include <mutex>
+#include <cmath>
 #include <memory>
+#include <string>
+#include <thread>
 #include <vector>
 #include <chrono>
+#include <iostream>
 
 #include "boost/serialization/serialization.hpp"
 #include "boost/any.hpp"
@@ -54,6 +58,8 @@ private:
     std::shared_ptr<LockQueue<ApplyMsg>> applyChan;
     // 选举超时
     std::chrono::_V2::system_clock::time_point m_lastResetElectionTime;
+    // 心跳超时，用于leader
+    std::chrono::_V2::system_clock::time_point m_lastResetHearBeatTime;
     // 2D中用于传入快照点
     // 储存了快照中的最后一个日志的Index和Term
     int m_lastSnapshotIncludeIndex;
