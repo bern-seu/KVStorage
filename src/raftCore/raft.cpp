@@ -19,6 +19,7 @@ void Raft::AppendEntries(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcP
     DEFER { persist(); };  //由于这个局部变量创建在锁之后，因此执行persist的时候应该也是拿到锁的.
     if(args->term() > m_currentTerm){
         // 三变 ,防止遗漏，无论什么时候都是三变
+        m_status = Follower;
         m_currentTerm = args->term();
         m_votedFor = -1; // 这里设置成-1有意义，如果突然宕机然后上线理论上是可以投票的
         // 这里不返回，让改节点尝试接收日志
@@ -61,13 +62,21 @@ void Raft::AppendEntries(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcP
             int sliceIdx = getSlicesIndexFromLogIndex(log.logindex());
             if (m_logs[sliceIdx].logterm() == log.logterm()) {
                 // 显式校验：Term 相同但 Command 不同是严重的存储层错误
-                // (你的 Assert 写得很对)
+                if (m_logs[getSlicesIndexFromLogIndex(log.logindex())].logterm() == log.logterm() &&
+                        m_logs[getSlicesIndexFromLogIndex(log.logindex())].command() != log.command()) {
+                    //相同位置的log ，其logTerm相等，但是命令却不相同，不符合raft的前向匹配，异常了！
+                    myAssert(false, format("[func-AppendEntries-rf{%d}] 两节点logIndex{%d}和term{%d}相同，但是其command{%d:%d}   "
+                                            " {%d:%d}却不同！！\n",
+                                            m_me, log.logindex(), log.logterm(), m_me,
+                                            m_logs[getSlicesIndexFromLogIndex(log.logindex())].command(), args->leaderid(),
+                                            log.command()));
+                }
                 continue; // 匹配，继续检查下一条
             } else {
                 // 3. !!! 发现冲突 !!!
                 // 动作：截断！删除从当前位置开始的所有日志
                 // [Cite: Raft Paper Section 5.3] "If an existing entry conflicts with a new one... delete the existing entry and all that follow it."
-                long long current_idx = sliceIdx;
+                int current_idx = sliceIdx;
                 m_logs.erase(m_logs.begin() + current_idx, m_logs.end());
                 
                 // 既然删除了，状态要更新（比如持久化）
@@ -114,6 +123,68 @@ void Raft::AppendEntries(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcP
     }
 }
 
+void Raft::applierTicker(){
+    while(true){
+        m_mtx.lock();
+        if(m_status == Leader){
+            DPrintf("[Raft::applierTicker() - raft{%d}]  m_lastApplied{%d}   m_commitIndex{%d}", m_me, m_lastApplied,
+            m_commitIndex);
+        }
+        auto applyMsgs = getApplyLogs();
+        m_mtx.unlock();
+        // todo:好像必须拿锁，因为不拿锁的话如果调用多次applyLog函数，可能会导致应用的顺序不一样
+        if (!applyMsgs.empty()) {
+            DPrintf("[func- Raft::applierTicker()-raft{%d}] 向kvserver報告的applyMsgs長度爲：{%d}", m_me, applyMsgs.size());
+        }
+        for (auto& message : applyMsgs) {
+            applyChan->Push(message);
+        }
+        sleepNMilliseconds(ApplyInterval);
+    }
+}
+
+bool Raft::CondInstallSnapshot(int lastIncludedTerm, int lastIncludedIndex, std::string snapshot) {
+    std::lock_guard<std::mutex> locker(m_mtx);
+    // 1. 检查快照是否过时
+    // 如果在处理快照的过程中，我们已经提交了比这个快照更新的日志 (commitIndex >= lastIncludedIndex)，
+    // 说明这个快照已经旧了，不能安装，否则会把数据回滚到旧状态
+    if (lastIncludedIndex <= m_commitIndex) {
+        DPrintf("[CondInstallSnapshot] Refused. Snapshot index{%d} <= commitIndex{%d}", lastIncludedIndex, m_commitIndex);
+        return false;
+    }
+    // 2. 日志裁剪 (Log Truncation)
+    // 我们需要保留那些“比快照还新”的日志，丢弃那些“已经被快照包含”的日志。
+    int lastLogIndex = getLastLogIndex();
+
+    if (lastIncludedIndex > lastLogIndex){
+        // 直接清空所有日志，因为它们都被快照覆盖了
+        m_logs.clear();
+    }else{
+        // 保留 lastIncludedIndex 之后的部分
+        // 获取 lastIncludedIndex 在当前 m_logs 数组中的下标
+        int sliceIdx = getSlicesIndexFromLogIndex(lastIncludedIndex);
+        if (sliceIdx != -1) {
+             // 把 index <= lastIncludedIndex 的所有日志删掉
+             m_logs.erase(m_logs.begin(), m_logs.begin() + sliceIdx + 1);
+        } else {
+             // 理论上不应该发生，如果找不到 index，为了安全起见清空
+             m_logs.clear();
+        }
+    }
+    // 3. 更新快照元数据
+    // 更新记录的“快照末尾”信息
+    m_lastSnapshotIncludeIndex = lastIncludedIndex;
+    m_lastSnapshotIncludeTerm = lastIncludedTerm;
+    // 4. 更新核心状态
+    // 快照代表这些数据已经被提交并应用了，所以直接推进 commitIndex 和 lastApplied
+    m_commitIndex = lastIncludedIndex;
+    m_lastApplied = lastIncludedIndex;
+    // 5. 持久化
+    // persistData() 会根据上面更新后的 m_logs 和 m_lastSnapshotIncludeIndex 生成新的状态数据
+    m_persister->Save(persistData(), snapshot);
+    return true;
+}
+
 //进来前要保证logIndex是存在的，即≥rf.lastSnapshotIncludeIndex	，而且小于等于rf.getLastLogIndex()
 bool Raft::matchLog(int logIndex, int logTerm){
     myAssert(logIndex >= m_lastSnapshotIncludeIndex && logIndex <= getLastLogIndex(), format("不满足:logIndex{%d}>=rf.lastSnapshotIncludeIndex{%d}&&logIndex{%d}<=rf.getLastLogIndex{%d}",
@@ -127,7 +198,7 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
     //与其他节点沟通的rpc类
     m_peers = peers;
     //持久化类
-    m_presister = persister;
+    m_persister = persister;
     //标记自己，不能给自己发送rpc
     m_me = me;
     {
@@ -148,7 +219,7 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
         m_lastResetElectionTime = now();
         m_lastResetHearBeatTime = now();
         // 持久化存储中回复raft的状态
-        readPersist(m_presister->ReadRaftState());
+        readPersist(m_persister->ReadRaftState());
         //如果m_lastSnapshotIncludeIndex大于0，则将m_lastApplied设置为该值，这是为了确保在崩溃后能够从快照中恢复状态
         if(m_lastSnapshotIncludeIndex > 0){
             m_lastApplied = m_lastSnapshotIncludeIndex;

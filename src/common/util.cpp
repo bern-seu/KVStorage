@@ -25,3 +25,5 @@ void myAssert(bool condition, std::string message) {
         std::exit(EXIT_FAILURE);
     }
 }
+
+void sleepNMilliseconds(int N) { std::this_thread::sleep_for(std::chrono::milliseconds(N)); };

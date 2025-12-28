@@ -36,6 +36,8 @@ void DPrintf(const char* format, ...);
 void myAssert(bool condition, std::string message = "Assertion failed!");
 std::chrono::_V2::system_clock::time_point now();
 
+void sleepNMilliseconds(int N);
+
 template <typename... Args>
 std::string format(const char* format_str, Args... args){
     int size_s = std::snprintf(nullptr, 0, format_str, args...) + 1; // "\0"

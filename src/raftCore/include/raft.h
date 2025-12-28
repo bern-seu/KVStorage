@@ -39,7 +39,7 @@ class Raft : public raftRpcProctoc::raftRpc{
 private:
     std::mutex m_mtx;
     std::vector<std::shared_ptr<RaftRpcUtil>> m_peers;
-    std::shared_ptr<Persister> m_presister;
+    std::shared_ptr<Persister> m_persister;
     int m_me;
     int m_currentTerm;
     int m_votedFor;
@@ -72,7 +72,7 @@ public:
     void AppendEntries(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcProctoc::AppendEntriesReply *reply);
     //定期向状态机写入日志
     void applierTicker();
-    //记录某个时刻的状态
+    //用于确认并真正安装一个从 Leader 那里接收到的快照，确保在应用安装快照的这段时间窗口内，Raft 状态机没有因为处理了新的日志而导致这个快照变得“过时”
     bool CondInstallSnapshot(int lastIncludedTerm, int lastIncludedIndex, std::string snapshot);
     //发起选举,心跳超时，Follower成为candidate，term+1，之后发起选举
     void doElection();
