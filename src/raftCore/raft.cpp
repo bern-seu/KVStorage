@@ -192,6 +192,102 @@ bool Raft::matchLog(int logIndex, int logTerm){
     return logTerm == getLogTermFromLogIndex(logIndex);
 }
 
+void Raft::doElection() {
+    std::lock_guard<std::mutex> g(m_mtx);
+    if (m_status != Leader){
+        DPrintf("[       ticker-func-rf(%d)              ]  选举定时器到期且不是leader，开始选举 \n", m_me);
+        //当选举的时候定时器超时就必须重新选举，不然没有选票就会一直卡主
+        //重竞选超时，term也会增加的
+        m_status = Candidate;
+        ///开始新一轮的选举
+        m_currentTerm += 1;
+        m_votedFor = m_me;  //即是自己给自己投，也避免candidate给同辈的candidate投
+        persist();//为什么这里需要持久化？因为当currentTerm、votedFor、log[]这三个状态必须在修改后立即持久化到磁盘
+        auto votedNum = std::make_shared<std::atomic<int>>(1);
+        //	重新设置定时器
+        m_lastResetElectionTime = now();
+        //	发布RequestVote RPC
+        for(int i = 0; i < m_peers.size();++i){
+            if (i == m_me) {
+                continue;
+            }
+            int lastLogIndex = -1, lastLogTerm = -1;
+            getLastLogIndexAndTerm(&lastLogIndex, &lastLogTerm);  //获取最后一个log的term和下标
+            std::shared_ptr<raftRpcProctoc::RequestVoteArgs> requestVoteArgs =
+                std::make_shared<raftRpcProctoc::RequestVoteArgs>();
+            requestVoteArgs->set_term(m_currentTerm);
+            requestVoteArgs->set_candidateid(m_me);
+            requestVoteArgs->set_lastlogindex(lastLogIndex);
+            requestVoteArgs->set_lastlogterm(lastLogTerm);
+            auto requestVoteReply = std::make_shared<raftRpcProctoc::RequestVoteReply>();
+            //使用匿名函数执行避免其拿到锁,为什么这里传入了this指针，创建一个线程必须要传入this指针吗？直接传入函数地址和参数不行吗？
+            std::thread t(&Raft::sendRequestVote,this,i,requestVoteArgs,requestVoteReply,votedNum);
+            t.detach();
+        }
+    }
+}
+
+void Raft::doHeartBeat() {
+    std::lock_guard<std::mutex> g(m_mtx);
+    if(m_status == Leader){
+        DPrintf("[func-Raft::doHeartBeat()-Leader: {%d}] Leader的心跳定时器触发了且拿到mutex，开始发送AE\n", m_me);
+        //使用 atomic 防止并发写冲突
+        auto appendNums = std::make_shared<std::atomic<int>>(1);  //正确返回的节点的数量
+        //对Follower（除了自己外的所有节点发送AE）
+        // todo 这里肯定是要修改的，最好使用一个单独的goruntime来负责管理发送log，因为后面的log发送涉及优化之类的
+        // 最少要单独写一个函数来管理，而不是在这一坨
+        for(int i = 0;i<m_peers.size();++i){
+            if (i == m_me) {
+                continue;
+            }
+            DPrintf("[func-Raft::doHeartBeat()-Leader: {%d}] Leader的心跳定时器触发了 index:{%d}\n", m_me, i);
+            myAssert(m_nextIndex[i] >= 1, format("rf.nextIndex[%d] = {%d}", i, m_nextIndex[i]));
+            //日志压缩加入后要判断是发送快照还是发送AE
+            if (m_nextIndex[i] <= m_lastSnapshotIncludeIndex) {
+                std::thread t(&Raft::leaderSendSnapShot, this, i);  // 创建新线程并执行b函数，并传递参数
+                t.detach();
+                continue;
+            }
+            //构造发送值
+            int preLogIndex = -1;
+            int PrevLogTerm = -1;
+            getPrevLogInfo(i, &preLogIndex, &PrevLogTerm);
+            std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> appendEntriesArgs =
+                std::make_shared<raftRpcProctoc::AppendEntriesArgs>();
+            appendEntriesArgs->set_term(m_currentTerm);
+            appendEntriesArgs->set_leaderid(m_me);
+            appendEntriesArgs->set_prevlogindex(preLogIndex);
+            appendEntriesArgs->set_prevlogterm(PrevLogTerm);
+            appendEntriesArgs->clear_entries();
+            appendEntriesArgs->set_leadercommit(m_commitIndex);
+            // 如果 preLogIndex 是快照结尾，startIdx 应该是 0
+            // 如果 preLogIndex 是日志中间，startIdx 应该是那个位置的下一个
+            int startIdx = getSlicesIndexFromLogIndex(preLogIndex) + 1;
+            for (int j = startIdx; j < m_logs.size(); ++j) {
+                raftRpcProctoc::LogEntry* sendEntryPtr = appendEntriesArgs->add_entries();
+                *sendEntryPtr = m_logs[j]; // Protobuf 自动深拷贝
+            }
+            int lastLogIndex = getLastLogIndex();
+            // leader对每个节点发送的日志长短不一，但是都保证从preLogIndex发送直到最后
+            myAssert(appendEntriesArgs->prevlogindex() + appendEntriesArgs->entries_size() == lastLogIndex,
+               format("appendEntriesArgs.PrevLogIndex{%d}+len(appendEntriesArgs.Entries){%d} != lastLogIndex{%d}",
+                      appendEntriesArgs->prevlogindex(), appendEntriesArgs->entries_size(), lastLogIndex));
+            //  构造返回值,const修饰指针，是常量指针，可以改变值，不能改变指向
+            const std::shared_ptr<raftRpcProctoc::AppendEntriesReply> appendEntriesReply =
+                    std::make_shared<raftRpcProctoc::AppendEntriesReply>();
+            appendEntriesReply->set_appstate(Disconnected);
+            std::thread t(&Raft::sendAppendEntries, this, i, appendEntriesArgs, appendEntriesReply,
+                    appendNums);  // 创建新线程并执行b函数，并传递参数
+            t.detach();
+        }
+        m_lastResetHearBeatTime = now();  // leader发送心跳，就不是随机时间了
+    }
+}
+
+void Raft::electionTimeOutTicker() {
+    
+}
+
 void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
             std::shared_ptr<LockQueue<ApplyMsg>> applyCh)
 {
@@ -201,32 +297,31 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
     m_persister = persister;
     //标记自己，不能给自己发送rpc
     m_me = me;
-    {
-        std::lock_guard<std::mutex> locker(m_mtx);
-        applyChan = applyCh;
-        m_currentTerm = 0;
-        m_status = Follower;
-        m_commitIndex = 0;
-        m_lastApplied = 0;
-        m_logs.clear();
-        for(int i = 0; i < m_peers.size(); i++){
-            m_matchIndex.push_back(0);
-            m_nextIndex.push_back(0);
-        }
-        m_votedFor = -1;
-        m_lastSnapshotIncludeIndex = 0;
-        m_lastSnapshotIncludeTerm = 0;
-        m_lastResetElectionTime = now();
-        m_lastResetHearBeatTime = now();
-        // 持久化存储中回复raft的状态
-        readPersist(m_persister->ReadRaftState());
-        //如果m_lastSnapshotIncludeIndex大于0，则将m_lastApplied设置为该值，这是为了确保在崩溃后能够从快照中恢复状态
-        if(m_lastSnapshotIncludeIndex > 0){
-            m_lastApplied = m_lastSnapshotIncludeIndex;
-        }
-        DPrintf("[Init&ReInit] Sever %d, term %d, lastSnapshotIncludeIndex {%d} , lastSnapshotIncludeTerm {%d}", m_me,
-            m_currentTerm, m_lastSnapshotIncludeIndex, m_lastSnapshotIncludeTerm);
+    m_mtx.lock();
+    applyChan = applyCh;
+    m_currentTerm = 0;
+    m_status = Follower;
+    m_commitIndex = 0;
+    m_lastApplied = 0;
+    m_logs.clear();
+    for(int i = 0; i < m_peers.size(); i++){
+        m_matchIndex.push_back(0);
+        m_nextIndex.push_back(0);
     }
+    m_votedFor = -1;
+    m_lastSnapshotIncludeIndex = 0;
+    m_lastSnapshotIncludeTerm = 0;
+    m_lastResetElectionTime = now();
+    m_lastResetHearBeatTime = now();
+    // 持久化存储中回复raft的状态
+    readPersist(m_persister->ReadRaftState());
+    //如果m_lastSnapshotIncludeIndex大于0，则将m_lastApplied设置为该值，这是为了确保在崩溃后能够从快照中恢复状态
+    if(m_lastSnapshotIncludeIndex > 0){
+        m_lastApplied = m_lastSnapshotIncludeIndex;
+    }
+    DPrintf("[Init&ReInit] Sever %d, term %d, lastSnapshotIncludeIndex {%d} , lastSnapshotIncludeTerm {%d}", m_me,
+        m_currentTerm, m_lastSnapshotIncludeIndex, m_lastSnapshotIncludeTerm);
+    m_mtx.unlock();
     // 协程相关设置, 定义在config头文件中
     // const int FIBER_THREAD_NUM = 1;              // 协程库中线程池大小
     // const bool FIBER_USE_CALLER_THREAD = false;  // 是否使用caller_thread执行调度任务

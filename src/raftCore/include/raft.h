@@ -128,10 +128,10 @@ public:
     int getSlicesIndexFromLogIndex(int logIndex);
     //请求其他节点给自己投票，
     bool sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVoteArgs> args,
-                        std::shared_ptr<raftRpcProctoc::RequestVoteReply> reply, std::shared_ptr<int> votedNum);
+                        std::shared_ptr<raftRpcProctoc::RequestVoteReply> reply, std::shared_ptr<std::atomic<int>> votedNum);
     //发送追加日志条目
     bool sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> args,
-                            std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply, std::shared_ptr<int> appendNums);
+                            std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply, std::shared_ptr<std::atomic<int>> appendNums);
 
     // 给上层的KVserver发送消息，rf.applyChan <- msg //不拿锁执行  可以单独创建一个线程执行，但是为了同意使用std:thread，避免使用pthread_create，因此专门写一个函数来执行
     void pushMsgToKvServer(ApplyMsg msg);
