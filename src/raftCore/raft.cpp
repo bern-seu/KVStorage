@@ -26,11 +26,99 @@ void Raft::AppendEntries(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcP
         // 如果本来就是Follower，那么其term变化，相当于“不言自明”的换了追随的对象，因为原来的leader的term更小，是不会再接收其消息了
         // 这两种情况都可以去接受日志
     }
-    
+    myAssert(args->term() == m_currentTerm, format("assert {args.Term == rf.currentTerm} fail"));
     m_status = Follower; //只要收到合法的AE，说明有leader，要变为follower
     // term相等，重置选举时间
     m_lastResetElectionTime = now();
-    //未完成
+    // 不能无脑的从prevlogIndex开始阶段日志，因为rpc可能会延迟，导致发过来的log是很久之前的
+    //	那么就比较日志，日志有3种情况
+    if(args->prevlogindex() > getLastLogIndex()){
+        reply->set_success(false);
+        reply->set_term(m_currentTerm);
+        reply->set_updatenextindex(getLastLogIndex() + 1);
+        return;
+    }else if(args->prevlogindex() < m_lastSnapshotIncludeIndex){
+        // 如果prevlogIndex还没有更上快照
+        reply->set_success(false);
+        reply->set_term(m_currentTerm);
+        reply->set_updatenextindex(m_lastSnapshotIncludeIndex +1);
+        // 如果想直接弄到最新好像不对，因为是从后慢慢往前匹配的，这里不匹配说明后面的都不匹配
+    }
+    // 判断args->prevlogterm()与本地的args->prevlogindex()对应的term是否相同，为什么要判断？
+    if(matchLog(args->prevlogindex(), args->prevlogterm()))
+    {
+        // 遍历 Leader 发来的 entries
+        int i = 0;
+        for (; i < args->entries_size(); ++i) {
+            auto log = args->entries(i);
+            
+            // 1. 如果 logindex 超出了我现在的范围，说明是全新的日志
+            if (log.logindex() > getLastLogIndex()) {
+                break; // 跳出循环，直接把剩下的全部 push_back
+            }
+
+            // 2. 如果 logindex 在我范围内，比较 Term
+            int sliceIdx = getSlicesIndexFromLogIndex(log.logindex());
+            if (m_logs[sliceIdx].logterm() == log.logterm()) {
+                // 显式校验：Term 相同但 Command 不同是严重的存储层错误
+                // (你的 Assert 写得很对)
+                continue; // 匹配，继续检查下一条
+            } else {
+                // 3. !!! 发现冲突 !!!
+                // 动作：截断！删除从当前位置开始的所有日志
+                // [Cite: Raft Paper Section 5.3] "If an existing entry conflicts with a new one... delete the existing entry and all that follow it."
+                long long current_idx = sliceIdx;
+                m_logs.erase(m_logs.begin() + current_idx, m_logs.end());
+                
+                // 既然删除了，状态要更新（比如持久化）
+                break; // 跳出匹配循环，准备追加 Leader 的数据
+            }
+        }
+
+        // 4. 将 entries 中剩余的部分追加到末尾
+        for (; i < args->entries_size(); ++i) {
+            m_logs.push_back(args->entries(i));
+        }
+        //前面更新完后，理应getLastLogIndex() >= args->prevlogindex() + args->entries_size()
+        myAssert(
+        getLastLogIndex() >= args->prevlogindex() + args->entries_size(),
+        format("[func-AppendEntries1-rf{%d}]rf.getLastLogIndex(){%d} != args.PrevLogIndex{%d}+len(args.Entries){%d}",
+               m_me, getLastLogIndex(), args->prevlogindex(), args->entries_size()));
+        if (args->leadercommit() > m_commitIndex) {
+            m_commitIndex = std::min(args->leadercommit(), getLastLogIndex());
+            // 这个地方不能无脑跟上getLastLogIndex()，因为可能存在args->leadercommit()落后于 getLastLogIndex()的情况
+        }
+        //  这里的assert是不是多余了？
+        myAssert(getLastLogIndex() >= m_commitIndex,
+             format("[func-AppendEntries1-rf{%d}]  rf.getLastLogIndex{%d} < rf.commitIndex{%d}", m_me,
+                    getLastLogIndex(), m_commitIndex));
+        reply->set_success(true);
+        reply->set_term(m_currentTerm);
+        return;
+    }
+    else{
+        // 优化
+        // PrevLogIndex 长度合适，但是不匹配，因此往前寻找 矛盾的term的第一个元素
+        // 为什么该term的日志都是矛盾的呢？也不一定都是矛盾的，只是这么优化减少rpc而已
+        // ？什么时候term会矛盾呢？很多情况，比如leader接收了日志之后马上就崩溃等等
+        reply->set_updatenextindex(args->prevlogindex());
+        for (int index = args->prevlogindex(); index >= m_lastSnapshotIncludeIndex; --index) {
+            if (getLogTermFromLogIndex(index) != getLogTermFromLogIndex(args->prevlogindex())) {
+                reply->set_updatenextindex(index + 1);
+                break;
+            }
+        }
+        reply->set_success(false);
+        reply->set_term(m_currentTerm);
+        return;
+    }
+}
+
+//进来前要保证logIndex是存在的，即≥rf.lastSnapshotIncludeIndex	，而且小于等于rf.getLastLogIndex()
+bool Raft::matchLog(int logIndex, int logTerm){
+    myAssert(logIndex >= m_lastSnapshotIncludeIndex && logIndex <= getLastLogIndex(), format("不满足:logIndex{%d}>=rf.lastSnapshotIncludeIndex{%d}&&logIndex{%d}<=rf.getLastLogIndex{%d}",
+                  logIndex, m_lastSnapshotIncludeIndex, logIndex, getLastLogIndex()));
+    return logTerm == getLogTermFromLogIndex(logIndex);
 }
 
 void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,

@@ -14,7 +14,7 @@ message AppendEntriesArgs  {
 	int32 Term        =1;// Leader 当前的任期（我是第几届总统）
 	int32 LeaderId       =2;// Leader 的 ID（比如 IP:Port）
     // --- 核心一致性检查字段 ---
-	int32 PrevLogIndex =3;// 我紧挨着要发的新日志之前，前一条日志的索引是多少？
+	int32 PrevLogIndex =3;// 我发的新日志之前，前一条日志的索引是多少？
 	int32 PrevLogTerm  =4;// 那前一条日志的任期是多少？
     // 作用：Follower 收到后会检查自己相同位置是否有这条日志。
     // 如果没有或 Term 不对，说明 Follower 也就是“跟丢了”，拒绝接收新日志。

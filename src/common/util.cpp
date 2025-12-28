@@ -18,3 +18,10 @@ void DPrintf(const char *format, ...){
         va_end(args);
     }
 }
+
+void myAssert(bool condition, std::string message) {
+    if (!condition) {
+        std::cerr << "Error: " << message << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+}
