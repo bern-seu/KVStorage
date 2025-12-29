@@ -27,3 +27,11 @@ void myAssert(bool condition, std::string message) {
 }
 
 void sleepNMilliseconds(int N) { std::this_thread::sleep_for(std::chrono::milliseconds(N)); };
+
+std::chrono::milliseconds getRandomizedElectionTimeout() {
+    // 只在第一次运行初始化，之后一直这就这一个对象
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int> dist(minRandomizedElectionTime, maxRandomizedElectionTime);
+    // 每次调用，rng 内部状态都会变，dist 就会映射出不同的结果
+    return std::chrono::milliseconds(dist(rng));
+}

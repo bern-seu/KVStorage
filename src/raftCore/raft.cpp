@@ -1,5 +1,6 @@
 #include "raft.h"
 #include "config.h"
+#include <chrono>
 
 //AppendEntries方法的本地实现(利用了重载)
 void Raft::AppendEntries(const raftRpcProctoc::AppendEntriesArgs *args, raftRpcProctoc::AppendEntriesReply *reply)
@@ -285,8 +286,99 @@ void Raft::doHeartBeat() {
 }
 
 void Raft::electionTimeOutTicker() {
-    
+    while (true) {
+        // 1. 如果是 Leader，就休息，等待身份变化
+        // 注意：这里需要加锁读取 m_status，或者 m_status 是原子变量
+        while (m_status == Leader) { 
+            std::this_thread::sleep_for(std::chrono::milliseconds(HeartBeatTimeout));
+        }
+
+        // 2. 生成一个随机超时时间 (比如 300ms ~ 500ms)
+        std::chrono::milliseconds timeout = getRandomizedElectionTimeout();
+        
+        // 3. 记录睡眠开始时的“上次心跳时间”
+        std::chrono::system_clock::time_point lastLogTime;
+        {
+            std::lock_guard<std::mutex> locker(m_mtx);
+            lastLogTime = m_lastResetElectionTime;
+        }
+
+        // 4. 睡眠这段时间
+        std::this_thread::sleep_for(timeout);
+
+        // 5. 睡醒了！检查睡眠期间有没有收到过新消息
+        bool needToElect = false; // 定义一个标志位
+        {
+            std::lock_guard<std::mutex> locker(m_mtx);
+            
+            // 如果睡眠期间 m_lastResetElectionTime 变大了，说明收到了心跳
+            // 检查逻辑：如果收到了心跳，或者已经不是 Follower 了
+            if (m_lastResetElectionTime > lastLogTime || m_status == Leader) {
+                // 不需要选举，do nothing
+            } else {
+                // 需要选举！但不要在这里调用 doElection，只设置标志位
+                needToElect = true; 
+            }
+        }
+        if (needToElect) {
+            // doElection 内部会自己抢锁，不会死锁
+            // doElection 内部拿到锁后，建议再做一次 Double Check (再次检查状态)，
+            // 因为在“解锁”到“进入 doElection”的微小时间窗口内，状态可能变了。
+            doElection(); 
+        }
+    }
 }
+
+std::vector<ApplyMsg> Raft::getApplyLogs() {
+    //std::lock_guard<std::mutex> guard(m_mtx);
+    std::vector<ApplyMsg> applyMsgs;
+    myAssert(m_commitIndex <= getLastLogIndex(), format("[func-getApplyLogs-rf{%d}] commitIndex{%d} >getLastLogIndex{%d}",
+                                                      m_me, m_commitIndex, getLastLogIndex()));
+    while(m_lastApplied < m_commitIndex){
+        m_lastApplied++;
+         myAssert(m_logs[getSlicesIndexFromLogIndex(m_lastApplied)].logindex() == m_lastApplied,
+             format("rf.logs[rf.getSlicesIndexFromLogIndex(rf.lastApplied)].LogIndex{%d} != rf.lastApplied{%d} ",
+                    m_logs[getSlicesIndexFromLogIndex(m_lastApplied)].logindex(), m_lastApplied));
+        ApplyMsg applyMsg;
+        applyMsg.CommandValid = true;
+        applyMsg.SnapshotValid = false;
+        applyMsg.Command = m_logs[getSlicesIndexFromLogIndex(m_lastApplied)].command();
+        applyMsg.CommandIndex = m_lastApplied;
+        applyMsgs.emplace_back(applyMsg);
+    }
+    return applyMsgs;
+}
+// 获取新命令应该分配的Index
+int Raft::getNewCommandIndex() {
+  //	如果len(logs)==0,就为快照的index+1，否则为log最后一个日志+1
+  if(m_logs.empty()) return m_lastSnapshotIncludeIndex + 1;
+  auto lastLogIndex = getLastLogIndex();
+  return lastLogIndex + 1;
+}
+int Raft::getLastLogIndex() {
+  int lastLogIndex = -1;
+  int _ = -1;
+  getLastLogIndexAndTerm(&lastLogIndex, &_);
+  return lastLogIndex;
+}
+int Raft::getLastLogTerm() {
+  int _ = -1;
+  int lastLogTerm = -1;
+  getLastLogIndexAndTerm(&_, &lastLogTerm);
+  return lastLogTerm;
+}
+void Raft::getLastLogIndexAndTerm(int* lastLogIndex, int* lastLogTerm) {
+  if (m_logs.empty()) {
+    *lastLogIndex = m_lastSnapshotIncludeIndex;
+    *lastLogTerm = m_lastSnapshotIncludeTerm;
+    return;
+  } else {
+    *lastLogIndex = m_logs[m_logs.size() - 1].logindex();
+    *lastLogTerm = m_logs[m_logs.size() - 1].logterm();
+    return;
+  }
+}
+
 
 void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
             std::shared_ptr<LockQueue<ApplyMsg>> applyCh)

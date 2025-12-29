@@ -1,5 +1,7 @@
 #ifndef UTIL_H
 #define UTIL_H
+#include <random>
+#include <thread>
 #include <string>
 #include <sstream>
 #include <mutex>
@@ -35,7 +37,7 @@ private:
 void DPrintf(const char* format, ...);
 void myAssert(bool condition, std::string message = "Assertion failed!");
 std::chrono::_V2::system_clock::time_point now();
-
+std::chrono::milliseconds getRandomizedElectionTimeout();
 void sleepNMilliseconds(int N);
 
 template <typename... Args>

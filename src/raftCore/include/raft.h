@@ -53,7 +53,7 @@ private:
     std::vector<int> m_matchIndex;
     enum Status { Follower, Candidate, Leader};
     // 身份
-    Status m_status;
+    std::atomic<Status> m_status;
     // raft内部使用的chan，applyChan是用于和服务层交互,最后好像没用上
     std::shared_ptr<LockQueue<ApplyMsg>> applyChan;
     // 选举超时
