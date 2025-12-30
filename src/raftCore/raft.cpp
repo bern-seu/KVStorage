@@ -759,19 +759,129 @@ bool Raft::sendRequestVote(int server, std::shared_ptr<raftRpcProctoc::RequestVo
     return true;
 }
 
-// bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> args,
-//                              std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply,
-//                              std::shared_ptr<std::atomic<int>> appendNums) 
-// {
-//     DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc開始 ， args->entries_size():{%d}", m_me,
-//           server, args->entries_size());
-//     bool ok = m_peers[server]->AppendEntries(args.get(), reply.get());
-//     if (!ok) {
-//         DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc失敗", m_me, server);
-//         return ok;
-//     }
-//     return true;
-// }
+bool Raft::sendAppendEntries(int server, std::shared_ptr<raftRpcProctoc::AppendEntriesArgs> args,
+                             std::shared_ptr<raftRpcProctoc::AppendEntriesReply> reply,
+                             std::shared_ptr<std::atomic<int>> appendNums) 
+{
+    DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc開始 ， args->entries_size():{%d}", m_me,
+            server, args->entries_size());
+            
+    // 1. 发送 RPC
+    bool ok = m_peers[server]->AppendEntries(args.get(), reply.get());
+    if (!ok) {
+        DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc失敗", m_me, server);
+        return ok;
+    }
+
+    DPrintf("[func-Raft::sendAppendEntries-raft{%d}] leader 向节点{%d}发送AE rpc成功", m_me, server);
+    
+    // 2. 检查连接状态 (ButtonRPC 特有)
+    if (reply->appstate() == Disconnected) {
+        return ok;
+    }
+
+    std::lock_guard<std::mutex> lg1(m_mtx);
+
+    // 3. 处理 Term 更大的情况 (发现新 Leader)
+    if (reply->term() > m_currentTerm) {
+        m_status = Follower;
+        m_currentTerm = reply->term();
+        m_votedFor = -1;
+        persist(); // 【关键修改】状态变更必须持久化！
+        return ok;
+    } 
+    // 处理 Term 更小的情况 (过期的回复)
+    else if (reply->term() < m_currentTerm) {
+        DPrintf("[func -sendAppendEntries  rf{%d}]  节点：{%d}的term{%d}<rf{%d}的term{%d}\n", m_me, server, reply->term(),
+                m_me, m_currentTerm);
+        return ok;
+    }
+
+    // Double Check: 如果在等待 RPC 期间身份变了，不再处理
+    if (m_status != Leader) {
+        return ok;
+    }
+
+    // Term 必须相等 (代码健壮性检查)
+    myAssert(reply->term() == m_currentTerm,
+           format("reply.Term{%d} != rf.currentTerm{%d}   ", reply->term(), m_currentTerm));
+
+    // 4. 处理日志不一致 (Success == False)
+    if (!reply->success()) {
+        // 利用 Follower 的 Hint 快速回溯 NextIndex
+        if (reply->updatenextindex() != -100) {
+            DPrintf("[func -sendAppendEntries  rf{%d}]  返回的日志term相等，但是不匹配，回缩nextIndex[%d]：{%d}\n", m_me,
+              server, reply->updatenextindex());
+            m_nextIndex[server] = reply->updatenextindex(); 
+        }
+        // 如果这里没有 else 逻辑，可能需要一个兜底回退，比如 m_nextIndex[server]--
+        // 但如果 AppendEntries 实现保证了 updatenextindex 有效，则不需要
+    } 
+    // 5. 处理成功 (Success == True)
+    else {      
+        // 更新 matchIndex (使用 max 防止乱序包导致回退)
+        m_matchIndex[server] = std::max(m_matchIndex[server], args->prevlogindex() + args->entries_size());
+        
+        // 更新 nextIndex
+        m_nextIndex[server] = m_matchIndex[server] + 1;
+
+        int lastLogIndex = getLastLogIndex();
+        myAssert(m_nextIndex[server] <= lastLogIndex + 1,
+             format("error msg:rf.nextIndex[%d] > lastLogIndex+1, len(rf.logs) = %d   lastLogIndex{%d} = %d", server,
+                    m_logs.size(), server, lastLogIndex));
+
+        // 只要 matchIndex 更新了，就尝试计算一下看看能不能推动 commitIndex
+        // 这个函数内部包含了 "多数派检查" 和 "当前Term检查"
+        leaderUpdateCommitIndex(); 
+    }
+
+    return ok;
+}
+
+void Raft::AppendEntries(google::protobuf::RpcController* controller,
+                         const ::raftRpcProctoc::AppendEntriesArgs* request,
+                         ::raftRpcProctoc::AppendEntriesReply* response, ::google::protobuf::Closure* done) {
+    AppendEntries(request, response); //调用本地方法
+    done->Run();
+}
+
+void Raft::InstallSnapshot(google::protobuf::RpcController* controller,
+                           const ::raftRpcProctoc::InstallSnapshotRequest* request,
+                           ::raftRpcProctoc::InstallSnapshotResponse* response, ::google::protobuf::Closure* done) {
+    InstallSnapshot(request, response);
+
+    done->Run();
+}
+
+void Raft::RequestVote(google::protobuf::RpcController* controller, const ::raftRpcProctoc::RequestVoteArgs* request,
+                       ::raftRpcProctoc::RequestVoteReply* response, ::google::protobuf::Closure* done) {
+    RequestVote(request, response);
+    done->Run();
+}
+//整个 Raft 系统启动共识流程的唯一入口,是 KVServer 叫 Raft “干活” 的入口（提交新任务）
+//todo:修改架构，不能在底层调用asstring序列化，序列化应该是KVserver完成，交给底层的应该是string数据
+void Raft::Start(Op command, int* newLogIndex, int* newLogTerm, bool* isLeader) {
+    std::lock_guard<std::mutex> lg1(m_mtx);
+    if (m_status != Leader) { //但是初始化是每个节点都是Follower，这样不是没法start吗？
+        DPrintf("[func-Start-rf{%d}]  is not leader");
+        *newLogIndex = -1;
+        *newLogTerm = -1;
+        *isLeader = false;
+        return;
+    }
+    raftRpcProctoc::LogEntry newLogEntry;
+    newLogEntry.set_command(command.asString());
+    newLogEntry.set_logterm(m_currentTerm);
+    newLogEntry.set_logindex(getNewCommandIndex());
+    m_logs.emplace_back(newLogEntry);
+    int lastLogIndex = getLastLogIndex();
+    DPrintf("[func-Start-rf{%d}]  lastLogIndex:%d,command:%s\n", m_me, lastLogIndex, &command);
+    persist();
+    *newLogIndex = newLogEntry.logindex();
+    *newLogTerm = newLogEntry.logterm();
+    *isLeader = true;
+}
+
 
 void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::shared_ptr<Persister> persister,
             std::shared_ptr<LockQueue<ApplyMsg>> applyCh)
@@ -827,4 +937,96 @@ void Raft::init(std::vector<std::shared_ptr<RaftRpcUtil>> peers, int me, std::sh
     // std::thread t2(&Raft::electionTimeOutTicker, this);
     // t2.detach();
     //
+}
+
+std::string Raft::persistData() {
+    BoostPersistRaftNode boostPersistRaftNode;
+    boostPersistRaftNode.m_currentTerm = m_currentTerm;
+    boostPersistRaftNode.m_votedFor = m_votedFor;
+    boostPersistRaftNode.m_lastSnapshotIncludeIndex = m_lastSnapshotIncludeIndex;
+    boostPersistRaftNode.m_lastSnapshotIncludeTerm = m_lastSnapshotIncludeTerm;
+    for (auto& item : m_logs) {
+        boostPersistRaftNode.m_logs.push_back(item.SerializeAsString());
+    }
+
+    std::stringstream ss;
+    boost::archive::text_oarchive oa(ss);
+    oa << boostPersistRaftNode;
+    return ss.str();
+}
+void Raft::readPersist(std::string data) {//这里似乎是直接从内存读
+    if (data.empty()) {
+        return;
+    }
+    std::stringstream iss(data);
+    boost::archive::text_iarchive ia(iss);
+    // read class state from archive
+    BoostPersistRaftNode boostPersistRaftNode;
+    ia >> boostPersistRaftNode;
+
+    m_currentTerm = boostPersistRaftNode.m_currentTerm;
+    m_votedFor = boostPersistRaftNode.m_votedFor;
+    m_lastSnapshotIncludeIndex = boostPersistRaftNode.m_lastSnapshotIncludeIndex;
+    m_lastSnapshotIncludeTerm = boostPersistRaftNode.m_lastSnapshotIncludeTerm;
+    m_logs.clear();
+    for (auto& item : boostPersistRaftNode.m_logs) {
+        raftRpcProctoc::LogEntry logEntry;
+        logEntry.ParseFromString(item);
+        m_logs.emplace_back(logEntry);
+    }
+}
+
+void Raft::Snapshot(int index, std::string snapshot) {
+    std::lock_guard<std::mutex> lg(m_mtx);
+
+    // 1. 检查快照是否过时，或者是否试图快照未提交的日志
+    if (m_lastSnapshotIncludeIndex >= index || index > m_commitIndex) {
+        DPrintf("[Snapshot-rf{%d}] reject snapshot index %d (currentSnapshotIndex %d, commitIndex %d)",
+                m_me, index, m_lastSnapshotIncludeIndex, m_commitIndex);
+        return;
+    }
+
+    // 记录旧状态用于 Debug/Assert
+    int lastLogIndex = getLastLogIndex(); 
+
+    // 2. 保存快照元数据
+    // 一定要先取 Term，再截断日志，否则截断后 index 可能就取不到了
+    int newLastSnapshotIncludeTerm = m_logs[getSlicesIndexFromLogIndex(index)].logterm();
+    
+    // 3. 截断日志 (Log Truncation)
+    // 我们需要保留 index 之后的所有日志 (index+1, index+2 ...)
+    int dropEndSlicesIdx = getSlicesIndexFromLogIndex(index);
+    
+    // 如果 m_logs 里还有比 index 更新的日志，保留它们
+    if (dropEndSlicesIdx + 1 < m_logs.size()) {
+        std::vector<raftRpcProctoc::LogEntry> newLogs(
+            std::make_move_iterator(m_logs.begin() + dropEndSlicesIdx + 1),
+            std::make_move_iterator(m_logs.end())
+        );
+        m_logs = std::move(newLogs);
+    } else {
+        m_logs.clear();
+    }
+
+    // 4. 更新快照元数据
+    m_lastSnapshotIncludeIndex = index;
+    m_lastSnapshotIncludeTerm = newLastSnapshotIncludeTerm;
+
+    // 5. 更新状态机位置 (可选，但为了严谨建议保留)
+    // 因为既然生成了 index 的快照，说明 index 及其之前的数据已经被状态机“消化”了
+    m_lastApplied = std::max(m_lastApplied, index);
+    
+    // m_commitIndex 不需要更新，因为前提就是 index <= m_commitIndex
+
+    // 6. 持久化 (保存 Raft 状态 + 应用层快照)
+    m_persister->Save(persistData(), snapshot);
+
+    DPrintf("[Snapshot] Server %d snapshot success. index:%d, term:%d, log_remain:%d", 
+            m_me, index, m_lastSnapshotIncludeTerm, m_logs.size());
+            
+    // 校验：现在的快照Index + 剩余日志长度 应该等于 之前的总日志长度
+    // 注意：只有当没有任何新日志在 snapshot 期间被追加进来时，这个等式才严格成立。
+    // 在持锁情况下是成立的。
+    myAssert(m_logs.size() + m_lastSnapshotIncludeIndex == lastLogIndex,
+             format("Log len mismatch: %d + %d != %d", m_logs.size(), m_lastSnapshotIncludeIndex, lastLogIndex));
 }
