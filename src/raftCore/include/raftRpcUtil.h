@@ -1,6 +1,7 @@
 #ifndef RAFTRPC_H
 #define RAFTRPC_H
 
+#include "mprpcchannel.h"
 #include "raftRPC.pb.h"
 
 /// @brief 维护当前节点对其他某一个结点的所有rpc发送通信的功能
