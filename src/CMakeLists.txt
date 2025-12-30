@@ -5,3 +5,5 @@ add_subdirectory(fiber)
 add_subdirectory(raftCore)
 
 add_subdirectory(raftRpcPro)
+
+add_subdirectory(rpc)

@@ -1012,7 +1012,7 @@ void Raft::Snapshot(int index, std::string snapshot) {
     m_lastSnapshotIncludeIndex = index;
     m_lastSnapshotIncludeTerm = newLastSnapshotIncludeTerm;
 
-    // 5. 更新状态机位置 (可选，但为了严谨建议保留)
+    // 5. 更新状态机位置
     // 因为既然生成了 index 的快照，说明 index 及其之前的数据已经被状态机“消化”了
     m_lastApplied = std::max(m_lastApplied, index);
     

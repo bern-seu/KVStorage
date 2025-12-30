@@ -15,6 +15,7 @@ include_directories(${PROJECT_SOURCE_DIR}/src/common/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/fiber/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/raftCore/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/raftRpcPro/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/rpc/include)
 # 设置项目库文件搜索路径 -L
 link_directories(${PROJECT_SOURCE_DIR}/lib)
 # src包含了所有的相关代码
@@ -22,5 +23,5 @@ add_subdirectory(src)
 # example包含了使用的示例代码
 #add_subdirectory(example)
 
-add_library(skip_list_on_raft STATIC ${src_common} ${SRC_LIST} ${src_raftCore} ${src_raftRpcPro})
-#target_link_libraries()
+add_library(skip_list_on_raft STATIC ${src_common} ${SRC_LIST} ${src_raftCore} ${src_raftRpcPro} ${src_rpc})
+target_link_libraries(skip_list_on_raft muduo_net muduo_base pthread dl)
