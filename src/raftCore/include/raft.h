@@ -38,6 +38,7 @@ constexpr int Normal = 3;
 class Raft : public raftRpcProctoc::raftRpc{
 private:
     std::mutex m_mtx;
+    //m_peers 是 Raft 逻辑层通往外部世界的“唯一网关”
     std::vector<std::shared_ptr<RaftRpcUtil>> m_peers;
     std::shared_ptr<Persister> m_persister;
     int m_me;

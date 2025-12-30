@@ -9,6 +9,7 @@ const int ApplyInterval = 10 * debugMul;
 
 const int minRandomizedElectionTime = 300 * debugMul;  // ms
 const int maxRandomizedElectionTime = 500 * debugMul;  // ms
+const int kSnapshotTimeout = 5000 * debugMul;
 
 // 协程相关设置
 const int FIBER_THREAD_NUM = 1;              // 协程库中线程池大小

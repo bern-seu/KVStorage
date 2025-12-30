@@ -8,6 +8,7 @@
 class RaftRpcUtil{
 private:
     raftRpcProctoc::raftRpc_Stub *stub_;
+    MprpcChannel* channel_;
 public:
     //主动调用其他节点的三个方法,可以按照mit6824来调用，但是别的节点调用自己的好像就不行了，要继承protoc提供的service类才行
     bool AppendEntries(raftRpcProctoc::AppendEntriesArgs *args, raftRpcProctoc::AppendEntriesReply *response);
