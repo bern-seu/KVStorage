@@ -102,7 +102,7 @@ public:
 //这个Op是kvserver传递给raft的command
 class Op
 {
-private:
+public:
     std::string Operation;  // "Get" "Put" "Append"
     std::string Key;
     std::string Value;
@@ -145,5 +145,9 @@ private:
     }
 };
 
+///////////////////////////////////////////////kvserver reply err to clerk
+const std::string OK = "OK";
+const std::string ErrNoKey = "ErrNoKey";
+const std::string ErrWrongLeader = "ErrWrongLeader";
 
 #endif  //  UTIL_H

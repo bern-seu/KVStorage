@@ -862,7 +862,7 @@ void Raft::RequestVote(google::protobuf::RpcController* controller, const ::raft
 //todo:修改架构，不能在底层调用asstring序列化，序列化应该是KVserver完成，交给底层的应该是string数据
 void Raft::Start(Op command, int* newLogIndex, int* newLogTerm, bool* isLeader) {
     std::lock_guard<std::mutex> lg1(m_mtx);
-    if (m_status != Leader) { //但是初始化是每个节点都是Follower，这样不是没法start吗？
+    if (m_status != Leader) { 
         DPrintf("[func-Start-rf{%d}]  is not leader");
         *newLogIndex = -1;
         *newLogTerm = -1;

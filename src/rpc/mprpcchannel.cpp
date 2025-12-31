@@ -111,7 +111,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
   }
 
   // 接收rpc请求的响应值
-  char recv_buf[65536] = {0};
+  char recv_buf[1024] = {0};
   int recv_size = 0;
   if (-1 == (recv_size = recv(m_clientFd, recv_buf, 1024, 0))) {
     close(m_clientFd);

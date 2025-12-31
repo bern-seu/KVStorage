@@ -16,6 +16,7 @@ include_directories(${PROJECT_SOURCE_DIR}/src/fiber/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/raftCore/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/raftRpcPro/include)
 include_directories(${PROJECT_SOURCE_DIR}/src/rpc/include)
+include_directories(${PROJECT_SOURCE_DIR}/src/skipList/include)
 # 设置项目库文件搜索路径 -L
 link_directories(${PROJECT_SOURCE_DIR}/lib)
 # src包含了所有的相关代码

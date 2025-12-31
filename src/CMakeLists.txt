@@ -7,3 +7,5 @@ add_subdirectory(raftCore)
 add_subdirectory(raftRpcPro)
 
 add_subdirectory(rpc)
+
+add_subdirectory(skipList)

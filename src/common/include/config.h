@@ -11,6 +11,7 @@ const int minRandomizedElectionTime = 300 * debugMul;  // ms
 const int maxRandomizedElectionTime = 500 * debugMul;  // ms
 const int kSnapshotTimeout = 5000 * debugMul;
 
+const int CONSENSUS_TIMEOUT = 500 * debugMul;  // ms
 // 协程相关设置
 const int FIBER_THREAD_NUM = 1;              // 协程库中线程池大小
 const bool FIBER_USE_CALLER_THREAD = false;  // 是否使用caller_thread执行调度任务
