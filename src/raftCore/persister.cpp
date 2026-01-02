@@ -48,16 +48,18 @@ void Persister::SaveRaftState(const std::string& data) {
     }
     outfile.write(data.c_str(), data.size());
     outfile.close();
+    m_raftStateSize = data.size();
 }
 
 long long Persister::RaftStateSize() {
     std::lock_guard<std::mutex> lg(m_mtx);
     
-    std::ifstream infile(m_raftStateFileName, std::ios::ate | std::ios::binary); // ate: 指针定位到文件末尾
-    if (!infile.is_open()) {
-        return 0;
-    }
-    return infile.tellg(); // 返回当前文件读取指针距离文件开头的字节偏移量
+    // std::ifstream infile(m_raftStateFileName, std::ios::ate | std::ios::binary); // ate: 指针定位到文件末尾
+    // if (!infile.is_open()) {
+    //     return 0;
+    // }
+    // return infile.tellg(); // 返回当前文件读取指针距离文件开头的字节偏移量
+    return m_raftStateSize;
 }
 
 std::string Persister::ReadRaftState() {

@@ -10,6 +10,7 @@ private:
     std::mutex m_mtx;
     std::string m_raftStateFileName;
     std::string m_snapshotFileName;
+    long long m_raftStateSize = 0; // 缓存文件大小
     // 不需要维护成员变量的 fstream，随用随开更安全
 
 public:
