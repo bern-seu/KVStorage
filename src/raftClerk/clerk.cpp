@@ -1,4 +1,3 @@
-
 #include "clerk.h"
 
 #include "raftServerRpcUtil.h"

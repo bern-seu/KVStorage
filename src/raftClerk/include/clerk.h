@@ -1,3 +1,7 @@
+//
+// Created by swx on 23-6-4.
+//
+
 #ifndef SKIP_LIST_ON_RAFT_CLERK_H
 #define SKIP_LIST_ON_RAFT_CLERK_H
 #include <arpa/inet.h>
@@ -11,11 +15,10 @@
 #include <vector>
 #include "kvServerRPC.pb.h"
 #include "mprpcconfig.h"
-
 class Clerk {
  private:
   std::vector<std::shared_ptr<raftServerRpcUtil>>
-      m_servers;  //保存所有raft节点的fd 
+      m_servers;  //保存所有raft节点的fd //todo：全部初始化为-1，表示没有连接上
   std::string m_clientId;
   int m_requestId;
   int m_recentLeaderId;  //只是有可能是领导
@@ -39,4 +42,4 @@ class Clerk {
   Clerk();
 };
 
-#endif
+#endif  // SKIP_LIST_ON_RAFT_CLERK_H

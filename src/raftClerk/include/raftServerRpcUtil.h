@@ -1,4 +1,3 @@
-
 #ifndef RAFTSERVERRPC_H
 #define RAFTSERVERRPC_H
 

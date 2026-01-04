@@ -99,16 +99,6 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
   /*
   从时间节点来说，这里将请求发送过去之后rpc服务的提供者就会开始处理，返回的时候就代表着已经返回响应了
   */
-  MprpcController* my_controller = dynamic_cast<MprpcController*>(controller);
-  if (my_controller && my_controller->GetTimeout() > 0) {
-      struct timeval tv;
-      int timeout = my_controller->GetTimeout();
-      tv.tv_sec = timeout / 1000;
-      tv.tv_usec = (timeout % 1000) * 1000;
-      
-      // 设置 SO_RCVTIMEO，让 recv 在超时后返回 -1
-      setsockopt(m_clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-  }
 
   // 接收rpc请求的响应值
   char recv_buf[1024] = {0};
