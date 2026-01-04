@@ -2,6 +2,8 @@ add_subdirectory(common)
 
 add_subdirectory(fiber)
 
+add_subdirectory(raftClerk)
+
 add_subdirectory(raftCore)
 
 add_subdirectory(raftRpcPro)
