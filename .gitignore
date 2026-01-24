@@ -2,4 +2,6 @@ build/
 lib/
 *.out
 *.a
+# 忽略 bin 文件夹下的所有东西
+bin/*
 !bin/test.conf
