@@ -2,6 +2,21 @@
 cmake_minimum_required(VERSION 3.22)
 project(KVStorage)
 set(CMAKE_CXX_STANDARD 20)
+# ----------------- [新增开始] TSan 开关配置 -----------------
+# 定义一个开关 ENABLE_TSAN，默认是 OFF (关闭)
+option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+
+if(ENABLE_TSAN)
+    message(STATUS "-------------- ThreadSanitizer ENABLED --------------")
+    # 1. 编译选项：所有源文件都会带上 -fsanitize=thread
+    # -g 用于显示行号，-O1 优化能让 TSan 跑得快一点且不影响调试
+    add_compile_options(-fsanitize=thread -g -O1)
+    
+    # 2. 链接选项：确保链接器也能链接 TSan 库
+    # 注意：这对于生成可执行文件至关重要，否则会报 reference 错误
+    add_link_options(-fsanitize=thread)
+endif()
+# ----------------- [新增结束] -----------------
 # 生成debug版本，可以进行gdb调试
 set(CMAKE_BUILD_TYPE "Debug")
 
